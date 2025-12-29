@@ -1913,8 +1913,12 @@ class VpnClient {
         if (!$this->data) {
             return 0;
         }
-        
-        return (int)($this->data['traffic_sent'] ?? 0) + (int)($this->data['traffic_received'] ?? 0);
+
+        // Prefer the current bytes_* columns, but gracefully handle legacy traffic_* keys if present
+        $sent = $this->data['bytes_sent'] ?? $this->data['traffic_sent'] ?? 0;
+        $received = $this->data['bytes_received'] ?? $this->data['traffic_received'] ?? 0;
+
+        return (int)$sent + (int)$received;
     }
     
     /**
@@ -1958,10 +1962,10 @@ class VpnClient {
     public static function getClientsOverLimit(): array {
         $pdo = DB::conn();
         $stmt = $pdo->query('
-            SELECT id, name, traffic_sent, traffic_received, traffic_limit 
-            FROM vpn_clients 
-            WHERE traffic_limit IS NOT NULL 
-            AND (traffic_sent + traffic_received) >= traffic_limit 
+            SELECT id, name, bytes_sent, bytes_received, traffic_limit
+            FROM vpn_clients
+            WHERE traffic_limit IS NOT NULL
+            AND (bytes_sent + bytes_received) >= traffic_limit
             AND status = "active"
             ORDER BY id
         ');

@@ -141,11 +141,15 @@ function requireAdmin(): void {
     }
 }
 
-// Helper function to get authenticated user (JWT or session)
+// Helper function to get authenticated user (JWT via header/query or session)
 function getAuthUser(): ?array {
-    // Try JWT first
+    // Try JWT first (header or query parameter)
     $token = JWT::getTokenFromHeader();
-    if ($token !== null) {
+    if ($token === null && isset($_GET['token'])) {
+        $token = trim((string)$_GET['token']);
+    }
+
+    if ($token !== null && $token !== '') {
         $user = JWT::verify($token);
         if ($user !== null) {
             return $user;
@@ -178,6 +182,16 @@ function buildShareUrl(string $token): string {
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $host = $_SERVER['HTTP_HOST'] ?? '';
     $path = '/share/' . rawurlencode($token);
+    if ($host === '') {
+        return $path;
+    }
+    return $scheme . '://' . $host . $path;
+}
+
+function buildAuthenticatedClientUrl(int $clientId): string {
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    $path = '/clients/' . $clientId;
     if ($host === '') {
         return $path;
     }
@@ -952,23 +966,28 @@ Router::get('/clients/{id}', function ($params) {
     redirect('/app#/clients/' . $params['id']);
 });
 
-// Download client config
+// Download client config (supports JWT token query/header)
 Router::get('/clients/{id}/download', function ($params) {
-    requireAuth();
+    $user = getAuthUser();
+    if ($user === null) {
+        http_response_code(401);
+        echo 'Unauthorized';
+        return;
+    }
+
     $clientId = (int)$params['id'];
-    
+
     try {
         $client = new VpnClient($clientId);
         $clientData = $client->getData();
-        
+
         // Check ownership
-        $user = Auth::user();
-        if ($clientData['user_id'] != $user['id'] && !Auth::isAdmin()) {
+        if ($clientData['user_id'] != $user['id'] && ($user['role'] ?? '') !== 'admin') {
             http_response_code(403);
             echo 'Forbidden';
             return;
         }
-        
+
         $protocol = trim($_GET['protocol'] ?? '');
         $container = trim($_GET['container'] ?? '');
         $config = $protocol !== '' ? $client->getProtocolConfig($protocol, $container !== '' ? $container : null) : $client->getConfig();
@@ -977,7 +996,7 @@ Router::get('/clients/{id}/download', function ($params) {
             echo 'Config not found';
             return;
         }
-        
+
         // Check if name contains non-Latin characters
         $hasNonLatin = preg_match('/[^a-zA-Z0-9_-]/', $clientData['name']);
         $extension = 'conf';
@@ -994,7 +1013,7 @@ Router::get('/clients/{id}/download', function ($params) {
             // Use client name for Latin characters
             $filename = $clientData['name'] . '.' . $extension;
         }
-        
+
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: attachment; filename="' . $filename . '"');
         header('Content-Length: ' . strlen($config));
@@ -1777,7 +1796,8 @@ Router::get('/api/clients/{id}/details', function ($params) {
         $protocolGroups = buildProtocolGroupsFromClient($clientData);
         $qrCodes = buildQrCodesFromClient($clientData);
         $token = $client->ensureShareToken();
-        $shareUrl = $token !== '' ? buildShareUrl($token) : null;
+        // Fallback to the authenticated download endpoint when share tokens are unavailable
+        $shareUrl = $token !== '' ? buildShareUrl($token) : buildAuthenticatedClientUrl($clientId);
         $stats = $client->getFormattedStats();
         
         echo json_encode([
