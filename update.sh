@@ -91,6 +91,118 @@ error_exit() {
     exit 1
 }
 
+# Helpers
+is_interactive() {
+    [ -t 0 ] && [ -t 1 ]
+}
+
+require_interactive() {
+    if ! is_interactive; then
+        error_exit "$1"
+    fi
+}
+
+ensure_git() {
+    if ! command -v git &> /dev/null; then
+        error_exit "Git not found. Please install git first."
+    fi
+}
+
+detect_docker_compose() {
+    DOCKER_COMPOSE=""
+    if command -v docker &> /dev/null; then
+        if docker compose version &> /dev/null 2>&1; then
+            DOCKER_COMPOSE="docker compose"
+            log_success "Found: docker compose (v2)"
+        elif command -v docker-compose &> /dev/null; then
+            DOCKER_COMPOSE="docker-compose"
+            log_success "Found: docker-compose (v1)"
+        else
+            error_exit "Neither 'docker compose' nor 'docker-compose' found"
+        fi
+    else
+        error_exit "Docker not found. Please install Docker first."
+    fi
+}
+
+ensure_project_dir() {
+    if [ ! -f "docker-compose.yml" ]; then
+        error_exit "docker-compose.yml not found. Are you in the project directory?"
+    fi
+    log_success "Project directory confirmed"
+}
+
+load_env_config() {
+    if [ -f .env ]; then
+        set -a
+        source .env 2>/dev/null || log_warning "Some .env variables failed to load"
+        set +a
+        log_success ".env file loaded"
+        
+        DB_USER=${DB_USERNAME:-amnezia}
+        DB_PASS=${DB_PASSWORD:-amnezia}
+        DB_NAME=${DB_DATABASE:-amnezia_panel}
+        DB_ROOT_PASS=${DB_ROOT_PASSWORD:-rootpassword}
+    else
+        log_warning ".env file not found, using defaults"
+        DB_USER="amnezia"
+        DB_PASS="amnezia"
+        DB_NAME="amnezia_panel"
+        DB_ROOT_PASS="rootpassword"
+    fi
+}
+
+init_environment() {
+    detect_docker_compose
+    ensure_project_dir
+    load_env_config
+}
+
+run_db_cmd() {
+    set +e
+    "$@"
+    local status=$?
+    set -e
+    return $status
+}
+
+db_exec() {
+    run_db_cmd $DOCKER_COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASS" db mysql -uroot "$DB_NAME" "$@"
+}
+
+db_exec_sql() {
+    run_db_cmd $DOCKER_COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASS" db mysql -uroot -e "$1" "$DB_NAME"
+}
+
+db_query() {
+    run_db_cmd $DOCKER_COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASS" db mysql -uroot -sN -e "$1" "$DB_NAME" 2>/dev/null || echo "0"
+}
+
+db_dump() {
+    run_db_cmd $DOCKER_COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASS" db mysqldump -uroot --single-transaction --quick "$DB_NAME"
+}
+
+db_ping() {
+    run_db_cmd $DOCKER_COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASS" db mysqladmin ping -h localhost -uroot &>/dev/null
+}
+
+wait_for_db() {
+    local max_tries="${1:-30}"
+    local delay="${2:-2}"
+    local counter=0
+    until db_ping; do
+        counter=$((counter + 1))
+        if [ "$counter" -gt "$max_tries" ]; then
+            echo ""
+            return 1
+        fi
+        echo -n "."
+        sleep "$delay"
+    done
+    echo ""
+    return 0
+}
+
 # Trap errors
 trap 'error_exit "Script failed at line $LINENO"' ERR
 
@@ -115,9 +227,11 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     fi
     
     # List available backups
-    DB_BACKUPS=$(ls -t "$BACKUP_DIR"/db_backup_*.sql 2>/dev/null || echo "")
+    shopt -s nullglob
+    DB_BACKUPS=("$BACKUP_DIR"/db_backup_*.sql)
+    shopt -u nullglob
     
-    if [ -z "$DB_BACKUPS" ]; then
+    if [ ${#DB_BACKUPS[@]} -eq 0 ]; then
         error_exit "No backups found in $BACKUP_DIR"
     fi
     
@@ -127,7 +241,7 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     # Create array of backups
     BACKUP_LIST=()
     INDEX=1
-    for backup in $DB_BACKUPS; do
+    for backup in "${DB_BACKUPS[@]}"; do
         BACKUP_FILE=$(basename "$backup")
         TIMESTAMP_EXTRACTED=$(echo "$BACKUP_FILE" | grep -o '[0-9]\{8\}_[0-9]\{6\}')
         BACKUP_DATE=$(echo "$TIMESTAMP_EXTRACTED" | sed 's/_/ /' | sed 's/\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\) \([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)/\1-\2-\3 \4:\5:\6/')
@@ -147,8 +261,11 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
         log_info "Using specified backup: $SELECTED_TIMESTAMP"
     else
         # Interactive selection
+        require_interactive "Rollback selection requires a TTY. Use --rollback=TIMESTAMP for non-interactive mode."
         echo -n "Select backup number to rollback (1-$((INDEX-1))) or 'q' to quit: "
-        read -r SELECTION
+        if ! read -r SELECTION; then
+            error_exit "Failed to read selection"
+        fi
         
         if [ "$SELECTION" = "q" ] || [ "$SELECTION" = "Q" ]; then
             log_info "Rollback cancelled by user"
@@ -171,6 +288,9 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
         error_exit "Database backup not found: $DB_BACKUP_FILE"
     fi
     
+    # Initialize environment for rollback operations
+    init_environment
+    
     log ""
     log_warning "You are about to rollback to: $SELECTED_TIMESTAMP"
     log_warning "This will:"
@@ -180,8 +300,11 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     log "  4. Restart containers"
     log ""
     
+    require_interactive "Rollback confirmation requires a TTY."
     echo -n "Are you sure? Type 'yes' to continue: "
-    read -r CONFIRM
+    if ! read -r CONFIRM; then
+        error_exit "Rollback confirmation required"
+    fi
     
     if [ "$CONFIRM" != "yes" ]; then
         log_info "Rollback cancelled by user"
@@ -196,7 +319,7 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     mkdir -p "$ROLLBACK_BACKUP_DIR"
     
     log_info "Creating safety backup before rollback..."
-    if $DOCKER_COMPOSE exec -T db mysqldump -uroot -p"$DB_ROOT_PASS" --single-transaction --quick "$DB_NAME" > "$ROLLBACK_BACKUP_DIR/db_backup.sql" 2>>"$LOG_FILE"; then
+    if db_dump > "$ROLLBACK_BACKUP_DIR/db_backup.sql" 2>>"$LOG_FILE"; then
         log_success "Safety backup created"
     else
         log_warning "Failed to create safety backup, continuing anyway..."
@@ -204,7 +327,7 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     
     # Restore database
     log_info "Restoring database from: $DB_BACKUP_FILE"
-    if cat "$DB_BACKUP_FILE" | $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" 2>>"$LOG_FILE"; then
+    if db_exec < "$DB_BACKUP_FILE" 2>>"$LOG_FILE"; then
         log_success "Database restored"
     else
         error_exit "Failed to restore database"
@@ -215,6 +338,7 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     log "${BLUE}[2/4] Restoring code...${NC}"
     
     if [ -f "$COMMIT_BACKUP_FILE" ]; then
+        ensure_git
         TARGET_COMMIT=$(cat "$COMMIT_BACKUP_FILE")
         log_info "Restoring code to commit: $TARGET_COMMIT"
         
@@ -228,7 +352,7 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
         if git reset --hard "$TARGET_COMMIT" 2>&1 | tee -a "$LOG_FILE"; then
             log_success "Code restored to: $TARGET_COMMIT"
         else
-            log_error "Failed to restore code"
+            error_exit "Failed to restore code"
         fi
     else
         log_warning "No commit backup found, skipping code restore"
@@ -258,17 +382,9 @@ if [ $ROLLBACK_MODE -eq 1 ]; then
     log_info "Waiting for services to be ready..."
     sleep 10
     
-    MAX_TRIES=30
-    COUNTER=0
-    until $DOCKER_COMPOSE exec -T db mysqladmin ping -h localhost -uroot -p"$DB_ROOT_PASS" &>/dev/null; do
-        COUNTER=$((COUNTER + 1))
-        if [ $COUNTER -gt $MAX_TRIES ]; then
-            error_exit "Database did not become ready in time"
-        fi
-        echo -n "."
-        sleep 2
-    done
-    echo ""
+    if ! wait_for_db 30 2; then
+        error_exit "Database did not become ready in time"
+    fi
     
     log_success "Containers restarted"
     
@@ -297,33 +413,14 @@ if [ "$EUID" -eq 0 ]; then
     log_warning "Running as root. This is not recommended."
 fi
 
-# Auto-detect docker compose command
-DOCKER_COMPOSE=""
-if command -v docker &> /dev/null; then
-    if docker compose version &> /dev/null 2>&1; then
-        DOCKER_COMPOSE="docker compose"
-        log_success "Found: docker compose (v2)"
-    elif command -v docker-compose &> /dev/null; then
-        DOCKER_COMPOSE="docker-compose"
-        log_success "Found: docker-compose (v1)"
-    else
-        error_exit "Neither 'docker compose' nor 'docker-compose' found"
-    fi
-else
-    error_exit "Docker not found. Please install Docker first."
-fi
+detect_docker_compose
 
 # Check git
-if ! command -v git &> /dev/null; then
-    error_exit "Git not found. Please install git first."
-fi
+ensure_git
 log_success "Git version: $(git --version | cut -d' ' -f3)"
 
 # Check if we're in project directory
-if [ ! -f "docker-compose.yml" ]; then
-    error_exit "docker-compose.yml not found. Are you in the project directory?"
-fi
-log_success "Project directory confirmed"
+ensure_project_dir
 
 # ==========================================
 # 2. LOAD CONFIGURATION
@@ -331,24 +428,7 @@ log_success "Project directory confirmed"
 log ""
 log "${BLUE}[2/10] Loading configuration...${NC}"
 
-# Load .env file
-if [ -f .env ]; then
-    set -a
-    source .env 2>/dev/null || log_warning "Some .env variables failed to load"
-    set +a
-    log_success ".env file loaded"
-    
-    DB_USER=${DB_USERNAME:-amnezia}
-    DB_PASS=${DB_PASSWORD:-amnezia}
-    DB_NAME=${DB_DATABASE:-amnezia_panel}
-    DB_ROOT_PASS=${DB_ROOT_PASSWORD:-rootpassword}
-else
-    log_warning ".env file not found, using defaults"
-    DB_USER="amnezia"
-    DB_PASS="amnezia"
-    DB_NAME="amnezia_panel"
-    DB_ROOT_PASS="rootpassword"
-fi
+load_env_config
 
 log_info "Database: $DB_NAME"
 log_info "DB User: $DB_USER"
@@ -386,17 +466,9 @@ log_info "DB container: $DB_STATUS"
 
 # Wait for database to be ready
 log_info "Waiting for database to be ready..."
-MAX_TRIES=30
-COUNTER=0
-until $DOCKER_COMPOSE exec -T db mysqladmin ping -h localhost -uroot -p"$DB_ROOT_PASS" &>/dev/null; do
-    COUNTER=$((COUNTER + 1))
-    if [ $COUNTER -gt $MAX_TRIES ]; then
-        error_exit "Database did not become ready in time"
-    fi
-    echo -n "."
-    sleep 2
-done
-echo ""
+if ! wait_for_db 30 2; then
+    error_exit "Database did not become ready in time"
+fi
 log_success "Database is ready"
 
 # ==========================================
@@ -414,7 +486,7 @@ if [ $SKIP_BACKUP -eq 0 ]; then
     log_info "Backing up database..."
     DB_BACKUP_FILE="$BACKUP_DIR/db_backup_$TIMESTAMP.sql"
     
-    if $DOCKER_COMPOSE exec -T db mysqldump -uroot -p"$DB_ROOT_PASS" --single-transaction --quick "$DB_NAME" > "$DB_BACKUP_FILE" 2>>"$LOG_FILE"; then
+    if db_dump > "$DB_BACKUP_FILE" 2>>"$LOG_FILE"; then
         BACKUP_SIZE=$(du -h "$DB_BACKUP_FILE" | cut -f1)
         log_success "Database backup created: $DB_BACKUP_FILE ($BACKUP_SIZE)"
     else
@@ -479,28 +551,33 @@ log_info "Fetching from remote..."
 git fetch origin 2>&1 | tee -a "$LOG_FILE"
 
 # Check if update available
-UPSTREAM=${1:-'@{u}'}
-LOCAL=$(git rev-parse @)
-REMOTE=$(git rev-parse "$UPSTREAM" 2>/dev/null || echo "$LOCAL")
-BASE=$(git merge-base @ "$UPSTREAM" 2>/dev/null || echo "$LOCAL")
-
-if [ "$LOCAL" = "$REMOTE" ]; then
-    if [ $FORCE_UPDATE -eq 0 ]; then
-        log_success "Already up to date"
-        UPDATE_AVAILABLE=0
-    else
-        log_warning "Forcing update even though already up to date"
-        UPDATE_AVAILABLE=1
-    fi
-elif [ "$LOCAL" = "$BASE" ]; then
-    log_info "New updates available"
-    UPDATE_AVAILABLE=1
-elif [ "$REMOTE" = "$BASE" ]; then
-    log_warning "Local commits ahead of remote. Pull skipped."
+UPSTREAM='@{u}'
+if ! git rev-parse --abbrev-ref --symbolic-full-name "$UPSTREAM" >/dev/null 2>&1; then
+    log_warning "No upstream configured for $CURRENT_BRANCH. Pull skipped."
     UPDATE_AVAILABLE=0
 else
-    log_warning "Branches have diverged"
-    UPDATE_AVAILABLE=1
+    LOCAL=$(git rev-parse @)
+    REMOTE=$(git rev-parse "$UPSTREAM" 2>/dev/null || echo "$LOCAL")
+    BASE=$(git merge-base @ "$UPSTREAM" 2>/dev/null || echo "$LOCAL")
+
+    if [ "$LOCAL" = "$REMOTE" ]; then
+        if [ $FORCE_UPDATE -eq 0 ]; then
+            log_success "Already up to date"
+            UPDATE_AVAILABLE=0
+        else
+            log_warning "Forcing update even though already up to date"
+            UPDATE_AVAILABLE=1
+        fi
+    elif [ "$LOCAL" = "$BASE" ]; then
+        log_info "New updates available"
+        UPDATE_AVAILABLE=1
+    elif [ "$REMOTE" = "$BASE" ]; then
+        log_warning "Local commits ahead of remote. Pull skipped."
+        UPDATE_AVAILABLE=0
+    else
+        log_warning "Branches have diverged"
+        UPDATE_AVAILABLE=1
+    fi
 fi
 
 if [ $UPDATE_AVAILABLE -eq 1 ]; then
@@ -526,11 +603,25 @@ fi
 log ""
 log "${BLUE}[7/10] Installing dependencies...${NC}"
 
-log_info "Running composer install..."
-if $DOCKER_COMPOSE exec -T web composer install --no-interaction --prefer-dist --optimize-autoloader 2>&1 | tee -a "$LOG_FILE" | grep -v "Warning"; then
-    log_success "Dependencies installed"
+NEED_COMPOSER=1
+if [ -f vendor/autoload.php ]; then
+    NEED_COMPOSER=0
+fi
+if [ "$CURRENT_COMMIT" != "$NEW_COMMIT" ]; then
+    if git diff --name-only "$CURRENT_COMMIT" "$NEW_COMMIT" 2>/dev/null | grep -qE 'composer\.(json|lock)'; then
+        NEED_COMPOSER=1
+    fi
+fi
+
+if [ $NEED_COMPOSER -eq 1 ]; then
+    log_info "Running composer install..."
+    if $DOCKER_COMPOSE exec -T web composer install --no-interaction --prefer-dist --optimize-autoloader 2>&1 | tee -a "$LOG_FILE" | grep -v "Warning"; then
+        log_success "Dependencies installed"
+    else
+        log_warning "Composer install completed with warnings (check log)"
+    fi
 else
-    log_warning "Composer install completed with warnings (check log)"
+    log_info "Skipping composer install (no dependency changes detected)"
 fi
 
 # ==========================================
@@ -547,7 +638,7 @@ if [ -z "$MIGRATIONS" ]; then
 else
     # Create migrations tracking table
     log_info "Ensuring migrations table exists..."
-    $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" <<EOF 2>>"$LOG_FILE"
+    if ! db_exec <<EOF 2>>"$LOG_FILE"
 CREATE TABLE IF NOT EXISTS schema_migrations (
     id INT PRIMARY KEY AUTO_INCREMENT,
     filename VARCHAR(255) UNIQUE NOT NULL,
@@ -556,21 +647,24 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     INDEX idx_filename (filename)
 );
 EOF
+    then
+        error_exit "Failed to ensure migrations table exists"
+    fi
     
     # Detect legacy installs missing baseline migration records
-    LEGACY_BASELINE_CHECK=$($DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -sN -e "SELECT COUNT(*) FROM schema_migrations WHERE filename = '010_add_monitoring_translations.sql';" 2>/dev/null || echo "0")
+    LEGACY_BASELINE_CHECK=$(db_query "SELECT COUNT(*) FROM schema_migrations WHERE filename = '010_add_monitoring_translations.sql';")
     if [ "$LEGACY_BASELINE_CHECK" = "0" ]; then
-        HAS_TRANSLATIONS_LOCALE=$($DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -sN -e "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'translations' AND COLUMN_NAME = 'locale';" 2>/dev/null || echo "0")
-        HAS_TRANSLATIONS_LANGUAGE_CODE=$($DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -sN -e "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'translations' AND COLUMN_NAME = 'language_code';" 2>/dev/null || echo "0")
+        HAS_TRANSLATIONS_LOCALE=$(db_query "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'translations' AND COLUMN_NAME = 'locale';")
+        HAS_TRANSLATIONS_LANGUAGE_CODE=$(db_query "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'translations' AND COLUMN_NAME = 'language_code';")
         if [ "$HAS_TRANSLATIONS_LOCALE" != "0" ] && [ "$HAS_TRANSLATIONS_LANGUAGE_CODE" = "0" ]; then
             log_warning "Detected legacy install without migration records. Seeding baseline entries..."
-            $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -e "INSERT IGNORE INTO schema_migrations (filename) VALUES \
+            db_exec_sql "INSERT IGNORE INTO schema_migrations (filename) VALUES \
             ('000_create_user.sql'),('001_init.sql'),('002_translations_ru.sql'),('003_translations_es.sql'),('004_translations_de.sql'),('005_translations_fr.sql'),('006_translations_zh.sql'),('007_add_traffic_limit.sql'),('008_add_panel_imports.sql'),('009_add_server_metrics.sql'),('010_add_monitoring_translations.sql');" 2>>"$LOG_FILE" || true
-            $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -e "INSERT IGNORE INTO user_roles (name, display_name, description, permissions) VALUES \
+            db_exec_sql "INSERT IGNORE INTO user_roles (name, display_name, description, permissions) VALUES \
             ('admin','Administrator','Full access to all features', JSON_ARRAY('*')),\
             ('manager','Manager','Can manage servers and clients', JSON_ARRAY('servers.view','servers.create','servers.edit','clients.view','clients.create','clients.edit','clients.delete')),\
             ('viewer','Viewer','Can only view own clients', JSON_ARRAY('clients.view_own','clients.download_own'));" 2>>"$LOG_FILE" || true
-            $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -e "INSERT IGNORE INTO ldap_group_mappings (ldap_group, role_name, description) VALUES \
+            db_exec_sql "INSERT IGNORE INTO ldap_group_mappings (ldap_group, role_name, description) VALUES \
             ('vpn-admins','admin','VPN administrators with full access'),\
             ('vpn-managers','manager','VPN managers who can create and manage clients'),\
             ('vpn-users','viewer','Regular VPN users with view-only access');" 2>>"$LOG_FILE" || true
@@ -586,18 +680,20 @@ EOF
         FILENAME=$(basename "$migration")
         
         # Check if already applied
-        ALREADY_APPLIED=$($DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -sN -e "SELECT COUNT(*) FROM schema_migrations WHERE filename = '$FILENAME';" 2>/dev/null || echo "0")
+        ALREADY_APPLIED=$(db_query "SELECT COUNT(*) FROM schema_migrations WHERE filename = '$FILENAME';")
         
         if [ "$ALREADY_APPLIED" = "0" ]; then
             log_info "Applying: $FILENAME"
             
             # Apply migration
-            if cat "$migration" | $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" 2>>"$LOG_FILE"; then
+            if db_exec < "$migration" 2>>"$LOG_FILE"; then
                 # Calculate checksum
                 CHECKSUM=$(sha256sum "$migration" | cut -d' ' -f1)
                 
                 # Mark as applied
-                $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -e "INSERT INTO schema_migrations (filename, checksum) VALUES ('$FILENAME', '$CHECKSUM');" 2>>"$LOG_FILE"
+                if ! db_exec_sql "INSERT INTO schema_migrations (filename, checksum) VALUES ('$FILENAME', '$CHECKSUM');" 2>>"$LOG_FILE"; then
+                    error_exit "Failed to record migration: $FILENAME"
+                fi
                 
                 log_success "Applied: $FILENAME"
                 APPLIED_COUNT=$((APPLIED_COUNT + 1))
@@ -610,7 +706,9 @@ EOF
                     
                     # Mark as applied to prevent re-running
                     CHECKSUM=$(sha256sum "$migration" | cut -d' ' -f1)
-                    $DOCKER_COMPOSE exec -T db mysql -uroot -p"$DB_ROOT_PASS" "$DB_NAME" -e "INSERT IGNORE INTO schema_migrations (filename, checksum) VALUES ('$FILENAME', '$CHECKSUM');" 2>>"$LOG_FILE"
+                    if ! db_exec_sql "INSERT IGNORE INTO schema_migrations (filename, checksum) VALUES ('$FILENAME', '$CHECKSUM');" 2>>"$LOG_FILE"; then
+                        log_warning "Failed to record migration status for $FILENAME"
+                    fi
                     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
                 else
                     log_error "Failed to apply: $FILENAME"
@@ -668,18 +766,9 @@ if [ $DOCKERFILE_CHANGED -eq 1 ]; then
     sleep 15
     
     # Wait for database
-    MAX_TRIES=30
-    COUNTER=0
-    until $DOCKER_COMPOSE exec -T db mysqladmin ping -h localhost -uroot -p"$DB_ROOT_PASS" &>/dev/null; do
-        COUNTER=$((COUNTER + 1))
-        if [ $COUNTER -gt $MAX_TRIES ]; then
-            log_warning "Database took longer than expected to start"
-            break
-        fi
-        echo -n "."
-        sleep 2
-    done
-    echo ""
+    if ! wait_for_db 30 2; then
+        log_warning "Database took longer than expected to start"
+    fi
     
     log_success "Containers rebuilt and restarted"
 else
@@ -771,7 +860,7 @@ if [ $SKIP_BACKUP -eq 0 ]; then
     log "  $0 --rollback"
     log "  or manually:"
     log "  1. $DOCKER_COMPOSE down"
-    log "  2. cat $BACKUP_DIR/db_backup_$TIMESTAMP.sql | $DOCKER_COMPOSE exec -T db mysql -uroot -p\$DB_ROOT_PASS $DB_NAME"
+    log "  2. $DOCKER_COMPOSE exec -T -e MYSQL_PWD=\$DB_ROOT_PASS db mysql -uroot $DB_NAME < $BACKUP_DIR/db_backup_$TIMESTAMP.sql"
     log "  3. git reset --hard $CURRENT_COMMIT"
     log "  4. $DOCKER_COMPOSE up -d"
     log ""

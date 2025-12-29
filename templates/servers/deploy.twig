@@ -29,8 +29,34 @@ function deploy() {
   log.innerHTML += '<div>🔐 Generating keys...</div>';
   log.innerHTML += '<div>⚙️  Configuring WireGuard...</div>';
   
-  fetch('/servers/{{ server.id }}/deploy', {method: 'POST'})
-    .then(r => r.json())
+  fetch('/servers/{{ server.id }}/deploy', {
+    method: 'POST',
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      'Accept': 'application/json'
+    },
+    credentials: 'same-origin'
+  })
+    .then(async r => {
+      const text = await r.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        const trimmed = text.trim();
+        if (r.status === 401) {
+          throw new Error('Session expired. Please log in again.');
+        }
+        if (trimmed.startsWith('<')) {
+          throw new Error('Server returned HTML instead of JSON. Check server logs.');
+        }
+        throw new Error('Invalid server response');
+      }
+      if (!r.ok) {
+        throw new Error(data.error || 'Server error');
+      }
+      return data;
+    })
     .then(d => {
       if (d.success) {
         log.innerHTML += '<div class="text-green-500 font-bold">✅ Deployment successful!</div>';
@@ -47,7 +73,7 @@ function deploy() {
       }
     })
     .catch(e => {
-      log.innerHTML += '<div class="text-red-500 font-bold">❌ Network error: ' + e.message + '</div>';
+      log.innerHTML += '<div class="text-red-500 font-bold">❌ Error: ' + e.message + '</div>';
       btn.disabled = false;
       btnText.textContent = 'Retry Deployment';
       btnSpinner.classList.add('hidden');

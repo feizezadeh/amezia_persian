@@ -22,7 +22,7 @@
       </dl>
       <div class="flex gap-2">
         <a href="/clients/{{ client.id }}/download" class="gradient-bg text-white px-4 py-2 rounded">
-          <i class="fas fa-download"></i> Download Config
+          <i class="fas fa-download"></i> {{ t('clients.download_config') }}
         </a>
         {% if client.status == 'active' %}
           <form method="POST" action="/clients/{{ client.id }}/revoke" style="display:inline;">
@@ -38,6 +38,23 @@
           </form>
         {% endif %}
       </div>
+      {% if share_url %}
+      <div class="mt-4">
+        <div class="text-xs text-gray-600 mb-1">{{ t('clients.share_link') }}</div>
+        <div class="flex flex-col md:flex-row gap-2">
+          <input id="shareLink" value="{{ share_url }}" readonly class="w-full px-3 py-2 border rounded text-sm bg-gray-50">
+          <div class="flex gap-2">
+            <button type="button" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-2 rounded text-sm" onclick="copyShareLink()">
+              <i class="fas fa-copy"></i> {{ t('clients.copy_share_link') }}
+            </button>
+            <a href="{{ share_url }}" target="_blank" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-2 rounded text-sm">
+              <i class="fas fa-external-link-alt"></i> {{ t('clients.open_share_page') }}
+            </a>
+          </div>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">{{ t('clients.share_link_hint') }}</p>
+      </div>
+      {% endif %}
     </div>
     
     <div class="bg-white rounded shadow p-6">
@@ -63,6 +80,27 @@
       </dl>
     </div>
   </div>
+
+  {% if protocol_groups is defined and protocol_groups|length > 0 %}
+  <div class="bg-white rounded shadow p-6 mb-6">
+    <h3 class="font-bold mb-4">{{ t('protocols.available') }}</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {% for group in protocol_groups %}
+      <div class="border rounded p-4">
+        <div class="font-semibold text-sm mb-2">{{ t(group.title_key) }}</div>
+        <div class="flex flex-wrap gap-2">
+          {% for item in group.items %}
+          <a href="/clients/{{ client.id }}/download?protocol={{ item.protocol }}{% if item.container %}&container={{ item.container }}{% endif %}" class="px-3 py-1.5 rounded bg-gray-100 hover:bg-gray-200 text-sm">
+            {{ t('protocols.download') }} {{ t(item.label_key) }}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-gray-500 mt-3">{{ t('protocols.download_hint') }}</p>
+  </div>
+  {% endif %}
   
   <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
     <div class="bg-white rounded shadow p-6">
@@ -143,16 +181,47 @@
     </div>
   </div>
   
-  {% if client.qr_code %}
-  <div class="bg-white rounded shadow p-6 text-center">
-    <h3 class="font-bold mb-4">QR Code</h3>
-    <img src="{{ client.qr_code }}" alt="QR Code" class="mx-auto" style="max-width: 300px; width: 100%; height: auto;">
-    <p class="text-sm text-gray-600 mt-2">Scan with Amnezia VPN app</p>
+  {% if qr_codes is defined and qr_codes|length > 0 %}
+  <div class="bg-white rounded shadow p-6">
+    <h3 class="font-bold mb-4">{{ t('clients.qr_code') }}</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {% for item in qr_codes %}
+      <div class="text-center">
+        <div class="text-sm font-semibold mb-2">
+          {% if item.label_key is defined %}
+            {{ t(item.label_key) }}
+          {% elseif item.label is defined %}
+            {{ item.label }}
+          {% else %}
+            {{ t('clients.qr_code') }}
+          {% endif %}
+        </div>
+        <img src="{{ item.qr }}" alt="QR Code" class="mx-auto" style="max-width: 300px; width: 100%; height: auto;">
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-sm text-gray-600 mt-4">Scan with Amnezia VPN app</p>
   </div>
   {% endif %}
 </div>
 
 <script>
+function copyShareLink() {
+  const input = document.getElementById('shareLink');
+  if (!input) {
+    return;
+  }
+  input.select();
+  input.setSelectionRange(0, 99999);
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(input.value).catch(() => {
+      document.execCommand('copy');
+    });
+  } else {
+    document.execCommand('copy');
+  }
+}
+
 function toggleExpirationEdit() {
   const select = document.getElementById('expirationSelect');
   const input = document.getElementById('expirationSeconds');

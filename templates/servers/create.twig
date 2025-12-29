@@ -10,6 +10,54 @@
     <div><label class="block text-sm font-medium text-gray-700">SSH Port</label><input name="port" type="number" value="22" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></div>
     <div><label class="block text-sm font-medium text-gray-700">SSH Username</label><input name="username" value="root" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></div>
     <div><label class="block text-sm font-medium text-gray-700">SSH Password</label><input name="password" type="password" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></div>
+
+    <div class="border-t pt-6">
+      <h2 class="text-lg font-semibold text-gray-900">{{ t('protocols.title') }}</h2>
+      <p class="text-sm text-gray-500">{{ t('protocols.subtitle') }}</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.awg') }} {{ t('protocols.port') }}</label>
+          <input name="awg_port" type="number" placeholder="55424" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.wireguard') }} {{ t('protocols.port') }}</label>
+          <input name="wireguard_port" type="number" placeholder="51820" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.openvpn') }} {{ t('protocols.port') }}</label>
+          <input name="openvpn_port" type="number" placeholder="1194" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.openvpn') }} {{ t('protocols.transport') }}</label>
+          <select name="openvpn_proto" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+            <option value="udp">UDP</option>
+            <option value="tcp">TCP</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.shadowsocks') }} {{ t('protocols.port') }}</label>
+          <input name="shadowsocks_port" type="number" placeholder="6789" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.shadowsocks') }} {{ t('protocols.port_range') }}</label>
+          <input name="shadowsocks_port_range" placeholder="40000-40999" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+          <p class="text-xs text-gray-500 mt-1">{{ t('protocols.port_range_hint') }}</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.cloak') }} {{ t('protocols.port') }}</label>
+          <input name="cloak_port" type="number" placeholder="443" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.cloak') }} {{ t('protocols.shadowsocks') }} {{ t('protocols.port_range') }}</label>
+          <input name="cloak_shadowsocks_port_range" placeholder="41000-41999" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-sm font-medium text-gray-700">{{ t('protocols.cloak') }} {{ t('protocols.fake_site') }}</label>
+          <input name="cloak_site" placeholder="tile.openstreetmap.org" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-2">{{ t('protocols.ikev2_fixed_ports') }}</p>
+    </div>
     
     <!-- Import from existing panel -->
     <div class="border-t pt-6">

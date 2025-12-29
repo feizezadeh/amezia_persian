@@ -31,6 +31,7 @@ class View {
         'de' => '🇩🇪',
         'fr' => '🇫🇷',
         'zh' => '🇨🇳',
+        'fa' => '🇮🇷',
       ];
       return $flags[$langCode] ?? '🌐';
     });

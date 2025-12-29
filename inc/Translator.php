@@ -7,6 +7,7 @@ class Translator {
     private static ?string $currentLanguage = null;
     private static array $translations = [];
     private static array $supportedLanguages = [];
+    private static array $fallbackTranslations = [];
     
     /**
      * Initialize translator
@@ -20,6 +21,11 @@ class Translator {
         
         // Load translations for current language
         self::loadTranslations(self::$currentLanguage);
+
+        // Load fallback English translations when needed
+        if (self::$currentLanguage !== 'en') {
+            self::loadFallbackTranslations();
+        }
     }
     
     /**
@@ -86,6 +92,14 @@ class Translator {
         $translations = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
         self::$translations = $translations ?: [];
     }
+
+    private static function loadFallbackTranslations(): void {
+        $pdo = DB::conn();
+        $stmt = $pdo->prepare('SELECT CONCAT(category, ".", key_name) as trans_key, translation FROM translations WHERE locale = ?');
+        $stmt->execute(['en']);
+        $translations = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+        self::$fallbackTranslations = $translations ?: [];
+    }
     
     /**
      * Translate a key
@@ -95,7 +109,13 @@ class Translator {
      * @return string Translated text
      */
     public static function translate(string $key, array $params = []): string {
-        $translation = self::$translations[$key] ?? $key;
+        $translation = self::$translations[$key] ?? null;
+        if ($translation === null && self::$currentLanguage !== 'en') {
+            $translation = self::$fallbackTranslations[$key] ?? null;
+        }
+        if ($translation === null) {
+            $translation = $key;
+        }
         
         if (!empty($params)) {
             return sprintf($translation, ...$params);
@@ -132,6 +152,11 @@ class Translator {
         
         // Reload translations
         self::loadTranslations($code);
+        if ($code !== 'en') {
+            self::loadFallbackTranslations();
+        } else {
+            self::$fallbackTranslations = [];
+        }
         
         return true;
     }
@@ -163,7 +188,8 @@ class Translator {
                 'es' => 'Spanish',
                 'de' => 'German',
                 'fr' => 'French',
-                'zh' => 'Chinese'
+                'zh' => 'Chinese',
+                'fa' => 'Persian'
             ];
             
             $targetLanguage = $langNames[$targetLang] ?? 'English';
@@ -379,7 +405,8 @@ class Translator {
                 'es' => 'Spanish',
                 'de' => 'German',
                 'fr' => 'French',
-                'zh' => 'Chinese'
+                'zh' => 'Chinese',
+                'fa' => 'Persian'
             ];
             
             $targetLanguage = $langNames[$targetLang] ?? 'English';

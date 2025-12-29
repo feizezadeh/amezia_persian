@@ -21,7 +21,7 @@ class QrUtil {
             $qrCode = QrCode::create($text)
                 ->setSize($size)
                 ->setMargin($margin)
-                ->setErrorCorrectionLevel(ErrorCorrectionLevel::Medium)
+                ->setErrorCorrectionLevel(ErrorCorrectionLevel::Low)
                 ->setEncoding(new Encoding('UTF-8'));
 
             if (class_exists(PngWriter::class) && extension_loaded('gd')) {
@@ -55,6 +55,20 @@ class QrUtil {
 
     private static function urlsafe_b64_encode(string $bytes): string {
         return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+    }
+
+    private static function qCompress(string $data, int $level = 9): string {
+        $compressed = gzcompress($data, $level);
+        if ($compressed === false) {
+            throw new RuntimeException('gzcompress failed');
+        }
+        return pack('N', strlen($data)) . $compressed;
+    }
+
+    public static function encodeAmneziaPayloadFromJson(string $jsonText): string {
+        $json = self::normalizeJson($jsonText);
+        $compressed = self::qCompress($json, 9);
+        return self::urlsafe_b64_encode($compressed);
     }
 
     public static function encodeOldPayloadFromJson(string $jsonText): string {

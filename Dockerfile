@@ -1,3 +1,13 @@
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app
+
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+RUN cd frontend && npm ci
+
+COPY frontend ./frontend
+RUN cd frontend && npm run build
+
 FROM php:8.2-apache
 
 # Install dependencies including LDAP
@@ -27,6 +37,9 @@ WORKDIR /var/www/html
 
 # Copy project files
 COPY . /var/www/html
+
+# Copy built frontend assets
+COPY --from=frontend-builder /app/public/app /var/www/html/public/app
 
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader

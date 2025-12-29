@@ -1,0 +1,63 @@
+{% extends "layout.twig" %}
+{% block title %}{{ client.name }}{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-8">
+  <div class="mb-6">
+    <h1 class="text-3xl font-bold">{{ client.name }}</h1>
+    <p class="text-sm text-gray-500">{{ t('clients.configuration') }}</p>
+  </div>
+
+  {% if qr_codes is defined and qr_codes|length > 0 %}
+  <div class="bg-white rounded shadow p-6 mb-6">
+    <h3 class="font-bold mb-4">{{ t('clients.qr_code') }}</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {% for item in qr_codes %}
+      <div class="text-center">
+        <div class="text-sm font-semibold mb-2">
+          {% if item.label_key is defined %}
+            {{ t(item.label_key) }}
+          {% elseif item.label is defined %}
+            {{ item.label }}
+          {% else %}
+            {{ t('clients.qr_code') }}
+          {% endif %}
+        </div>
+        <img src="{{ item.qr }}" alt="QR Code" class="mx-auto" style="max-width: 300px; width: 100%; height: auto;">
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-sm text-gray-600 mt-4">Scan with Amnezia VPN app</p>
+  </div>
+  {% endif %}
+
+  <div class="bg-white rounded shadow p-6 mb-6">
+    <h3 class="font-bold mb-4">{{ t('clients.download_config') }}</h3>
+    <div class="flex flex-wrap gap-2">
+      <a href="/share/{{ client.share_token }}/download" class="gradient-bg text-white px-4 py-2 rounded">
+        <i class="fas fa-download"></i> {{ t('clients.download_config') }}
+      </a>
+    </div>
+  </div>
+
+  {% if protocol_groups is defined and protocol_groups|length > 0 %}
+  <div class="bg-white rounded shadow p-6">
+    <h3 class="font-bold mb-4">{{ t('protocols.available') }}</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {% for group in protocol_groups %}
+      <div class="border rounded p-4">
+        <div class="font-semibold text-sm mb-2">{{ t(group.title_key) }}</div>
+        <div class="flex flex-wrap gap-2">
+          {% for item in group.items %}
+          <a href="/share/{{ client.share_token }}/download?protocol={{ item.protocol }}{% if item.container %}&container={{ item.container }}{% endif %}" class="px-3 py-1.5 rounded bg-gray-100 hover:bg-gray-200 text-sm">
+            {{ t('protocols.download') }} {{ t(item.label_key) }}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-gray-500 mt-3">{{ t('protocols.download_hint') }}</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

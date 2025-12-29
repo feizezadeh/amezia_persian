@@ -42,3 +42,8 @@ backup/
 backups/
 TEST_RESULTS.md
 LDAP_FEATURE.md
+.tmp_amnezia_client*
+.tmp_amnezia_refs/
+.tmp_amnezia_tree.json
+public/XXAzjrmB
+public/sedWDIbFL
