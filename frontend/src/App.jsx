@@ -36,16 +36,26 @@ function labelForKey(key) {
 
 function buildShareDownloadLink(baseUrl, protocol, container) {
   if (!baseUrl) return '';
+
+  // Normalize and safely append download + auth token when using authenticated links
   const normalized = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  let url = `${normalized}/download`;
-  const params = new URLSearchParams();
+  const url = new URL(normalized, window.location.origin);
+  url.pathname = `${url.pathname.replace(/\/$/, '')}/download`;
+
+  const params = url.searchParams;
   if (protocol) params.set('protocol', protocol);
   if (container) params.set('container', container);
-  const query = params.toString();
-  if (query) {
-    url += `?${query}`;
+
+  // When no share token is available we rely on authenticated links, so include the JWT token
+  if (!normalized.includes('/share/')) {
+    const token = getToken();
+    if (token) {
+      params.set('token', token);
+    }
   }
-  return url;
+
+  url.search = params.toString();
+  return url.toString();
 }
 
 function parseRoute() {
